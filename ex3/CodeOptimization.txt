@@ -1,0 +1,427 @@
+[24bcs036@mepcolinux ex7]$cat opt.c
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <stdbool.h>
+
+#define MAX_QUAD 100
+
+struct quad {
+    char op[10], a1[20], a2[20], res[20];
+    bool active;
+};
+
+struct quad q[MAX_QUAD];
+int n = 0;
+
+bool is_number(const char *s) {
+    if (!s || !*s) return false;
+    if (*s == '-' || *s == '+') s++;
+    if (!*s) return false;
+    while (*s) { if (!isdigit(*s)) return false; s++; }
+    return true;
+}
+bool is_temp(const char *s) { return (s[0]=='t'||s[0]=='T') && isdigit(s[1]); }
+bool is_valid_arg(const char *s) { return s && strlen(s) > 0 && strcmp(s, "-") != 0; }
+bool is_ctrl(int i) {   // block boundary
+    return !strcmp(q[i].op, "label") || !strcmp(q[i].op, "goto") || !strcmp(q[i].op, "ifFalse");
+}
+
+void clean_token(char *str) {
+    int j = 0; char temp[50];
+    for (int i = 0; str[i]; i++)
+        if (str[i]!='(' && str[i]!=')' && str[i]!=',' && str[i]!='"' && !isspace((unsigned char)str[i]))
+            temp[j++] = str[i];
+    temp[j] = '\0';
+    strcpy(str, j == 0 ? "-" : temp);
+}
+
+void read_quadruples(FILE *stream) {
+    char line[256]; n = 0;
+    while (fgets(line, sizeof(line), stream)) {
+        line[strcspn(line, "\r\n")] = 0;
+        if (strlen(line) == 0) continue;
+        if (n == 0 && isdigit(line[0])) {
+            bool is_count = true;
+            for (int i = 0; line[i]; i++)
+                if (!isdigit(line[i]) && !isspace((unsigned char)line[i])) { is_count = false; break; }
+            if (is_count) continue;
+        }
+        char t1[50]="-", t2[50]="-", t3[50]="-", t4[50]="-";
+        if (sscanf(line, "%s %s %s %s", t1, t2, t3, t4) >= 1) {
+            clean_token(t1); clean_token(t2); clean_token(t3); clean_token(t4);
+            strcpy(q[n].op, t1); strcpy(q[n].a1, t2);
+            strcpy(q[n].a2, t3); strcpy(q[n].res, t4);
+            q[n].active = true; n++;
+        }
+    }
+}
+
+// Shows ORIGINAL quad numbers so each step is easy to trace
+void print_quads(const char *title) {
+    printf("\n%s:\n", title);
+    printf("No.\tOp\tArg1\tArg2\tResult\n");
+    printf("======================================\n");
+    for (int i = 0; i < n; i++)
+        if (q[i].active)
+            printf("%d\t%s\t%s\t%s\t%s\n", i + 1, q[i].op, q[i].a1, q[i].a2, q[i].res);
+}
+
+/* Algebraic Simplification 
+bool algebraic_simplification() {
+    bool changed = false;
+    for (int i = 0; i < n; i++) {
+        if (!q[i].active) continue;
+        char *op = q[i].op, *a1 = q[i].a1, *a2 = q[i].a2;
+        bool done = false;
+        if (!strcmp(op, "*")) {
+            if (!strcmp(a2, "1")) { strcpy(op, "="); strcpy(a2, "-"); done = true; }
+            else if (!strcmp(a1, "1")) { strcpy(op, "="); strcpy(a1, a2); strcpy(a2, "-"); done = true; }
+            else if (!strcmp(a2, "0") || !strcmp(a1, "0")) { strcpy(op, "="); strcpy(a1, "0"); strcpy(a2, "-"); done = true; }
+        } else if (!strcmp(op, "+")) {
+            if (!strcmp(a2, "0")) { strcpy(op, "="); strcpy(a2, "-"); done = true; }
+            else if (!strcmp(a1, "0")) { strcpy(op, "="); strcpy(a1, a2); strcpy(a2, "-"); done = true; }
+        } else if (!strcmp(op, "-") || !strcmp(op, "/")) {
+            if (!strcmp(a2, (op[0]=='-') ? "0" : "1")) { strcpy(op, "="); strcpy(a2, "-"); done = true; }
+        }
+        if (done) { printf("  -> Quad %d simplified to: %s = %s\n", i+1, q[i].res, q[i].a1); changed = true; }
+    }
+    return changed;
+}*/
+
+/*  Constant Folding  */
+bool constant_folding() {
+    bool changed = false;
+    for (int i = 0; i < n; i++) {
+        if (!q[i].active) continue;
+        if (strlen(q[i].op) == 1 && strchr("+-*/", q[i].op[0]) &&
+            is_number(q[i].a1) && is_number(q[i].a2)) {
+            int x = atoi(q[i].a1), y = atoi(q[i].a2), r = 0;
+            char o = q[i].op[0];
+            if (o=='+') r = x+y; else if (o=='-') r = x-y; else if (o=='*') r = x*y;
+            else { if (y == 0) continue; r = x / y; }
+            printf("  -> Quad %d folded: %s %c %s = %d\n", i+1, q[i].a1, o, q[i].a2, r);
+            strcpy(q[i].op, "="); sprintf(q[i].a1, "%d", r); strcpy(q[i].a2, "-");
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+/*  Common Subexpression Elimination  */
+bool cse() {
+    bool changed = false;
+    for (int i = 0; i < n; i++) {
+        if (!q[i].active) continue;
+        if (!(strlen(q[i].op) == 1 && strchr("+-*/", q[i].op[0]))) continue;
+        for (int j = i - 1; j >= 0; j--) {
+            if (!q[j].active) continue;
+            if (is_ctrl(j)) break;                       // don't cross block boundary
+            if (!strcmp(q[j].op, q[i].op) && !strcmp(q[j].a1, q[i].a1) && !strcmp(q[j].a2, q[i].a2)) {
+                printf("  -> Quad %d same as Quad %d, reuse %s\n", i+1, j+1, q[j].res);
+                strcpy(q[i].op, "="); strcpy(q[i].a1, q[j].res); strcpy(q[i].a2, "-");
+                changed = true;
+                break;
+            }
+            // operand or result of earlier expr redefined -> stop
+            if (!strcmp(q[j].res, q[i].a1) || !strcmp(q[j].res, q[i].a2)) break;
+        }
+    }
+    return changed;
+}
+
+/*  Constant / Copy Propagation  */
+bool propagation() {
+    bool changed = false;
+    for (int i = 0; i < n; i++) {
+        if (!q[i].active || strcmp(q[i].op, "=")) continue;
+        char *var = q[i].res, *val = q[i].a1;
+        if (!strcmp(var, val)) continue;
+        for (int j = i + 1; j < n; j++) {
+            if (!q[j].active) continue;
+            if (!strcmp(q[j].op, "label")) break;        // join point: stop
+            if (is_valid_arg(q[j].a1) && !strcmp(q[j].a1, var)) {
+                printf("  -> Quad %d: arg1 %s replaced by %s\n", j+1, var, val);
+                strcpy(q[j].a1, val); changed = true;
+            }
+            if (is_valid_arg(q[j].a2) && !strcmp(q[j].a2, var)) {
+                printf("  -> Quad %d: arg2 %s replaced by %s\n", j+1, var, val);
+                strcpy(q[j].a2, val); changed = true;
+            }
+            if (is_ctrl(j)) break;                       // goto / ifFalse: stop
+            if (!strcmp(q[j].res, var) || !strcmp(q[j].res, val)) break; // redefined
+        }
+    }
+    return changed;
+}
+
+/*  Overwritten Store Elimination */
+bool dce_overwritten() {
+    bool changed = false;
+    for (int i = 0; i < n; i++) {
+        if (!q[i].active || strcmp(q[i].op, "=")) continue;
+        char *target = q[i].res;
+        bool read_later = false, redef = false;
+        for (int j = i + 1; j < n; j++) {
+            if (!q[j].active) continue;
+            if (is_ctrl(j)) { read_later = true; break; } // be safe at jumps/labels
+            if ((is_valid_arg(q[j].a1) && !strcmp(q[j].a1, target)) ||
+                (is_valid_arg(q[j].a2) && !strcmp(q[j].a2, target))) { read_later = true; break; }
+            if (!strcmp(q[j].res, target)) { redef = true; break; }
+        }
+        if (!read_later && redef) {
+            printf("  -> Quad %d removed: %s overwritten before use\n", i+1, target);
+            q[i].active = false; changed = true;
+        }
+    }
+    return changed;
+}
+
+/* Unused Temporary Elimination */
+bool dce_unused_temps() {
+    bool changed = false;
+    for (int i = n - 1; i >= 0; i--) {
+        if (!q[i].active || !is_temp(q[i].res)) continue;
+        bool used = false;
+        for (int j = 0; j < n; j++) {
+            if (!q[j].active || j == i) continue;
+            if ((is_valid_arg(q[j].a1) && !strcmp(q[j].a1, q[i].res)) ||
+                (is_valid_arg(q[j].a2) && !strcmp(q[j].a2, q[i].res))) { used = true; break; }
+        }
+        if (!used) {
+            printf("  -> Quad %d removed: %s never used\n", i+1, q[i].res);
+            q[i].active = false; changed = true;
+        }
+    }
+    return changed;
+}
+
+bool run_step(const char *name, bool (*f)()) {
+    printf("\n--> %s", name);
+    printf("\n");
+    bool c = f();
+    if (c) print_quads(name);
+    else   printf("  (no change)\n");
+    return c;
+}
+
+int main(int argc, char *argv[]) {
+    FILE *fp = NULL;
+    if (argc > 1) {
+        if (!strcmp(argv[1], "-")) fp = stdin;
+        else if (!(fp = fopen(argv[1], "r"))) { printf("Error opening file %s\n", argv[1]); return 1; }
+    } else {
+        fp = fopen("input.txt", "r");
+        if (!fp) fp = stdin;
+    }
+    read_quadruples(fp);
+    if (fp != stdin) fclose(fp);
+
+    print_quads("Original Quadruples");
+
+    int pass = 1; bool any;
+    do {
+        printf("\n\t PASS %d \t", pass);
+        any = false;
+        /*any |= run_step("Algebraic Simplification", algebraic_simplification);*/
+        any |= run_step("Constant Folding",         constant_folding);
+        any |= run_step("Common Subexpression Elimination", cse);
+        any |= run_step("Constant/Copy Propagation", propagation);
+        pass++;
+    } while (any && pass <= 100);
+
+    printf("\n\tDEAD CODE ELIMINATION\t ");
+    bool d;
+    do {
+        d  = run_step("Overwritten Store Elimination", dce_overwritten);
+        d |= run_step("Unused Temporary Elimination",  dce_unused_temps);
+    } while (d);
+    print_quads("Final Optimized Quadruples");
+    return 0;
+}
+
+[24bcs036@mepcolinux ex7]$cat input.txt
+= 0 - i
+label - - -
+< i 10 t1
+iff t1 - l1
++ sum i t2 
+= t2 - sum
++ i 1 t3
+= 100 - i
++ i 1 t4
++ 10 7 i
+= t3 - i
+* i 1 i
+goto - - l2
+label - - -
+
+
+
+[24bcs036@mepcolinux ex7]$./opt
+
+Original Quadruples:
+No.	Op	Arg1	Arg2	Result
+======================================
+1	=	0	-	i
+2	label	-	-	-
+3	<	i	10	t1
+4	iff	t1	-	l1
+5	+	sum	i	t2
+6	=	t2	-	sum
+7	+	i	1	t3
+8	=	100	-	i
+9	+	i	1	t4
+10	+	10	7	i
+11	=	t3	-	i
+12	*	i	1	i
+13	goto	-	-	l2
+14	label	-	-	-
+
+	 PASS 1 	
+--> Constant Folding
+  -> Quad 10 folded: 10 + 7 = 17
+
+Constant Folding:
+No.	Op	Arg1	Arg2	Result
+======================================
+1	=	0	-	i
+2	label	-	-	-
+3	<	i	10	t1
+4	iff	t1	-	l1
+5	+	sum	i	t2
+6	=	t2	-	sum
+7	+	i	1	t3
+8	=	100	-	i
+9	+	i	1	t4
+10	=	17	-	i
+11	=	t3	-	i
+12	*	i	1	i
+13	goto	-	-	l2
+14	label	-	-	-
+
+--> Common Subexpression Elimination
+  (no change)
+
+--> Constant/Copy Propagation
+  -> Quad 9: arg1 i replaced by 100
+  -> Quad 12: arg1 i replaced by t3
+
+Constant/Copy Propagation:
+No.	Op	Arg1	Arg2	Result
+======================================
+1	=	0	-	i
+2	label	-	-	-
+3	<	i	10	t1
+4	iff	t1	-	l1
+5	+	sum	i	t2
+6	=	t2	-	sum
+7	+	i	1	t3
+8	=	100	-	i
+9	+	100	1	t4
+10	=	17	-	i
+11	=	t3	-	i
+12	*	t3	1	i
+13	goto	-	-	l2
+14	label	-	-	-
+
+	 PASS 2 	
+--> Constant Folding
+  -> Quad 9 folded: 100 + 1 = 101
+
+Constant Folding:
+No.	Op	Arg1	Arg2	Result
+======================================
+1	=	0	-	i
+2	label	-	-	-
+3	<	i	10	t1
+4	iff	t1	-	l1
+5	+	sum	i	t2
+6	=	t2	-	sum
+7	+	i	1	t3
+8	=	100	-	i
+9	=	101	-	t4
+10	=	17	-	i
+11	=	t3	-	i
+12	*	t3	1	i
+13	goto	-	-	l2
+14	label	-	-	-
+
+--> Common Subexpression Elimination
+  (no change)
+
+--> Constant/Copy Propagation
+  (no change)
+
+	 PASS 3 	
+--> Constant Folding
+  (no change)
+
+--> Common Subexpression Elimination
+  (no change)
+
+--> Constant/Copy Propagation
+  (no change)
+
+	DEAD CODE ELIMINATION	 
+--> Overwritten Store Elimination
+  -> Quad 8 removed: i overwritten before use
+  -> Quad 10 removed: i overwritten before use
+  -> Quad 11 removed: i overwritten before use
+
+Overwritten Store Elimination:
+No.	Op	Arg1	Arg2	Result
+======================================
+1	=	0	-	i
+2	label	-	-	-
+3	<	i	10	t1
+4	iff	t1	-	l1
+5	+	sum	i	t2
+6	=	t2	-	sum
+7	+	i	1	t3
+9	=	101	-	t4
+12	*	t3	1	i
+13	goto	-	-	l2
+14	label	-	-	-
+
+--> Unused Temporary Elimination
+  -> Quad 9 removed: t4 never used
+
+Unused Temporary Elimination:
+No.	Op	Arg1	Arg2	Result
+======================================
+1	=	0	-	i
+2	label	-	-	-
+3	<	i	10	t1
+4	iff	t1	-	l1
+5	+	sum	i	t2
+6	=	t2	-	sum
+7	+	i	1	t3
+12	*	t3	1	i
+13	goto	-	-	l2
+14	label	-	-	-
+
+--> Overwritten Store Elimination
+  (no change)
+
+--> Unused Temporary Elimination
+  (no change)
+
+Final Optimized Quadruples:
+No.	Op	Arg1	Arg2	Result
+======================================
+1	=	0	-	i
+2	label	-	-	-
+3	<	i	10	t1
+4	iff	t1	-	l1
+5	+	sum	i	t2
+6	=	t2	-	sum
+7	+	i	1	t3
+12	*	t3	1	i
+13	goto	-	-	l2
+14	label	-	-	-
+[24bcs036@mepcolinux ex7]$exit
+exit
+
+Script done on Monday 26 October 2026 01:25:53 PM IST
