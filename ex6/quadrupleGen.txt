@@ -1,0 +1,334 @@
+[24bcs036@mepcolinux e6]$cat ex6.prn
+Script started on Sat Oct 17 11:00:23 2026
+[24bcs036@mepcolinux e6]$cat quad.l
+%{
+#include "y.tab.h"
+#include <string.h>
+#include <stdlib.h>
+%}
+
+%%
+
+"for"                    { return FOR; }
+"++"                     { return INCR; }
+"&&"                     { return AND; }
+"<="                     { return LE; }
+">="                     { return GE; }
+"<"                      { return LT; }
+">"                      { return GT; }
+"+"                      { return PLUS; }
+"-"                      { return MINUS; }
+"*"                      { return MUL; }
+"/"                      { return DIV; }
+"="                      { return ASSIGN; }
+";"                      { return SEMI; }
+"("                      { return LPAREN; }
+")"                      { return RPAREN; }
+"{"                      { return LBRACE; }
+"}"                      { return RBRACE; }
+[0-9]+                   { yylval.str = strdup(yytext); return NUM; }
+[a-zA-Z_][a-zA-Z0-9_]*  { yylval.str = strdup(yytext); return ID; }
+[ \t\n]+                 { /* Ignore whitespace */ }
+.                        { return yytext[0]; }
+
+%%
+
+int yywrap(void) {
+    return 1;
+}
+[24bcs036@mepcolinux e6]$cat quad.y
+%{
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+int t = 1;
+
+void printSeparator(void) {
+    printf("+--------+--------+--------+--------+--------+\n");
+}
+
+void printHeader(void) {
+    printf("\n");
+    printSeparator();
+    printf("| %-6s | %-6s | %-6s | %-6s | %-6s |\n",
+           "Label", "Op", "Arg1", "Arg2", "Result");
+    printSeparator();
+}
+
+void quad(char *label, char *op, char *arg1, char *arg2, char *result) {
+    printf("| %-6s | %-6s | %-6s | %-6s | %-6s |\n",
+           label, op, arg1, arg2, result);
+}
+
+void printTAC(char *result, char *arg1, char *op, char *arg2) {
+    /* This will store TAC lines to print later */
+}
+
+char* new_temp() {
+    char* temp = (char*)malloc(10);
+    sprintf(temp, "T%d", t++);
+    return temp;
+}
+
+char init_l[20], init_a[20];
+char cond_a[2][20], cond_b[2][20], cond_op[2][10];
+char inc_l[20];
+
+int condition_count = 0;
+int curr_cond_idx = 0;
+
+extern FILE *yyin;
+extern int yylex(void);
+int yyerror(char *s);
+%}
+
+%union {
+    char *str;
+}
+
+%token <str> ID NUM
+%token FOR LE GE LT GT PLUS MINUS MUL DIV ASSIGN INCR AND
+%token SEMI LPAREN RPAREN LBRACE RBRACE
+
+%type <str> operand expr
+
+%left PLUS MINUS
+%left MUL DIV
+
+%%
+
+program
+    : for_stmt
+    ;
+
+for_stmt
+    : FOR LPAREN init SEMI condition SEMI inc RPAREN LBRACE
+      {
+          printf("\n+========================================+");
+          printf("\n|      FOR-LOOP QUADRUPLE TABLE          |");
+          printf("\n+========================================+");
+          printHeader();
+
+          /* Initialization */
+          printf("| %-6s | %-6s | %-6s | %-6s | %-6s |\n",
+                 "-", "=", init_a, "-", init_l);
+
+          /* Begin condition checks */
+          printf("| %-6s | %-6s | %-6s | %-6s | %-6s |\n",
+                 "L2", "LABEL", "-", "-", "-");
+
+          char tname[10];
+
+          /* Check first comparison */
+          sprintf(tname, "T%d", t++);
+          quad("-", cond_op[0], cond_a[0], cond_b[0], tname);
+          quad("-", "IF_F", tname, "-", "L1");
+
+          /* Check second comparison when using && */
+          if (condition_count == 2) {
+              sprintf(tname, "T%d", t++);
+              quad("-", cond_op[1], cond_a[1], cond_b[1], tname);
+              quad("-", "IF_F", tname, "-", "L1");
+          }
+      }
+      stmt_list RBRACE
+      {
+          /* Increment: i++ or i=i+1 */
+          char tmp[10];
+          sprintf(tmp, "T%d", t++);
+          quad("-", "+", inc_l, "1", tmp);
+          quad("-", "=", tmp, "-", inc_l);
+
+          /* Repeat the condition check */
+          quad("-", "GOTO", "-", "-", "L2");
+
+          /* Loop exit */
+          quad("L1", "LABEL", "-", "-", "-");
+          printSeparator();
+
+          /* Print readable Three-Address Code */
+          printf("\n  --- Three-Address Code ---\n");
+          printf("  %-10s = %-10s\n", init_l, init_a);
+          printf("  L2:\n");
+          printf("  %-10s = %-6s %-6s %-6s\n", "T?", cond_a[0], cond_op[0], cond_b[0]);
+          printf("  IF_FALSE %-6s GOTO L1\n", "T?");
+          if (condition_count == 2) {
+              printf("  %-10s = %-6s %-6s %-6s\n", "T?", cond_a[1], cond_op[1], cond_b[1]);
+              printf("  IF_FALSE %-6s GOTO L1\n", "T?");
+          }
+          printf("  ... loop body ...\n");
+          printf("  %-10s = %-6s + %-6s\n", "T?", inc_l, "1");
+          printf("  %-10s = %-10s\n", inc_l, "T?");
+          printf("  GOTO L2\n");
+          printf("  L1:\n");
+          printf("\n");
+      }
+    ;
+
+init
+    : ID ASSIGN operand
+      {
+          strcpy(init_l, $1);
+          strcpy(init_a, $3);
+          curr_cond_idx = 0;
+      }
+    ;
+
+condition
+    : comparison
+      {
+          condition_count = curr_cond_idx;
+      }
+    | comparison AND comparison
+      {
+          condition_count = curr_cond_idx;
+      }
+    ;
+
+comparison
+    : operand LT operand
+      {
+          strcpy(cond_op[curr_cond_idx], "<");
+          strcpy(cond_a[curr_cond_idx], $1);
+          strcpy(cond_b[curr_cond_idx], $3);
+          curr_cond_idx++;
+      }
+    | operand GT operand
+      {
+          strcpy(cond_op[curr_cond_idx], ">");
+          strcpy(cond_a[curr_cond_idx], $1);
+          strcpy(cond_b[curr_cond_idx], $3);
+          curr_cond_idx++;
+      }
+    | operand LE operand
+      {
+          strcpy(cond_op[curr_cond_idx], "<=");
+          strcpy(cond_a[curr_cond_idx], $1);
+          strcpy(cond_b[curr_cond_idx], $3);
+          curr_cond_idx++;
+      }
+    | operand GE operand
+      {
+          strcpy(cond_op[curr_cond_idx], ">=");
+          strcpy(cond_a[curr_cond_idx], $1);
+          strcpy(cond_b[curr_cond_idx], $3);
+          curr_cond_idx++;
+      }
+    ;
+
+inc
+    : ID INCR
+      {
+          strcpy(inc_l, $1);
+      }
+    | ID ASSIGN ID PLUS NUM
+      {
+          strcpy(inc_l, $1);
+      }
+    ;
+
+stmt_list
+    : stmt_list stmt
+    | stmt
+    ;
+
+stmt
+    : ID ASSIGN expr SEMI
+      {
+          quad("-", "=", $3, "-", $1);
+      }
+    ;
+
+expr
+    : expr PLUS expr
+      {
+          char *temp = new_temp();
+          quad("-", "+", $1, $3, temp);
+          $$ = temp;
+      }
+    | expr MINUS expr
+      {
+          char *temp = new_temp();
+          quad("-", "-", $1, $3, temp);
+          $$ = temp;
+      }
+    | expr MUL expr
+      {
+          char *temp = new_temp();
+          quad("-", "*", $1, $3, temp);
+          $$ = temp;
+      }
+    | expr DIV expr
+      {
+          char *temp = new_temp();
+          quad("-", "/", $1, $3, temp);
+          $$ = temp;
+      }
+    | operand
+      {
+          $$ = $1;
+      }
+    ;
+
+operand
+    : ID  { $$ = $1; }
+    | NUM { $$ = $1; }
+    ;
+
+%%
+
+int main(void) {
+    FILE *fp = fopen("input.txt", "r");
+
+    if (!fp) {
+        printf("File not found\n");
+        return 1;
+    }
+
+    yyin = fp;
+    int rc = yyparse();
+    fclose(fp);
+    return rc;
+}
+
+int yyerror(char *s) {
+    fprintf(stderr, "Error: %s\n", s);
+    return 0;
+}
+[24bcs036@mepcolinux e6]$./quad
+
++========================================+
+|      FOR-LOOP QUADRUPLE TABLE          |
++========================================+
++--------+--------+--------+--------+--------+
+| Label  | Op     | Arg1   | Arg2   | Result |
++--------+--------+--------+--------+--------+
+| -      | =      | 0      | -      | i      |
+| L2     | LABEL  | -      | -      | -      |
+| -      | <      | i      | 10     | T1     |
+| -      | IF_F   | T1     | -      | L1     |
+| -      | +      | sum    | i      | T2     |
+| -      | =      | T2     | -      | sum    |
+| -      | +      | i      | 1      | T3     |
+| -      | =      | T3     | -      | i      |
+| -      | GOTO   | -      | -      | L2     |
+| L1     | LABEL  | -      | -      | -      |
++--------+--------+--------+--------+--------+
+
+  --- Three-Address Code ---
+  i          = 0         
+  L2:
+  T?         = i      <      10    
+  IF_FALSE T?     GOTO L1
+  ... loop body ...
+  T?         = i      + 1     
+  i          = T?        
+  GOTO L2
+  L1:
+
+[24bcs036@mepcolinux e6]$exit
+exit
+
+Script done on Sat Oct 17 11:00:43 2026
+[24bcs036@mepcolinux e6]$
