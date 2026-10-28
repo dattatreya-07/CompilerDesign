@@ -1,0 +1,209 @@
+[24bcs036@mepcolinux ex4]$cat ex4.prn
+Script started on Thu Oct  1 11:55:04 2026
+[24bcs036@mepcolinux ex4]$cat switch.l
+%{
+#include "y.tab.h"
+%}
+
+%%
+
+[ \t\n]+                    ; /* skip whitespace */
+
+"switch"                    { return SWITCH; }
+"case"                      { return CASE; }
+"default"                   { return DEFAULT; }
+"break"                     { return BREAK; }
+
+[0-9]+                      { return INTEGER; }
+[a-zA-Z_][a-zA-Z0-9_]*     { return IDENTIFIER; }
+
+"("                         { return '('; }
+")"                         { return ')'; }
+"{"                         { return '{'; }
+"}"                         { return '}'; }
+":"                         { return ':'; }
+";"                         { return ';'; }
+"+"                         { return '+'; }
+"-"                         { return '-'; }
+"*"                         { return '*'; }
+"/"                         { return '/'; }
+"%"                         { return '%'; }
+"="                         { return '='; }
+
+.                           { return yytext[0]; }
+
+%%
+
+int yywrap(void) {
+    return 1;
+}
+[24bcs036@mepcolinux ex4]$cat switch.y
+%{
+#include <stdio.h>
+#include <stdlib.h>
+
+/* Function prototypes */
+int yylex(void);
+void yyerror(const char *s);
+
+/* Input file pointer used by LEX */
+extern FILE *yyin;
+%}
+
+/* Token declarations */
+%token SWITCH CASE DEFAULT BREAK INTEGER IDENTIFIER
+
+/* Operator precedence and associativity */
+%right '='
+%left '+' '-'
+%left '*' '/' '%'
+
+%%
+/* ---------- GRAMMAR RULES ---------- */
+
+program:
+    stmt_list
+    ;
+
+stmt_list:
+    /* empty */
+    | stmt_list stmt
+    ;
+
+stmt:
+    expr ';'
+    | BREAK ';'
+    | switch_stmt
+    | compound_stmt
+    ;
+
+compound_stmt:
+    '{' stmt_list '}'
+    ;
+
+/* Switch statement grammar */
+switch_stmt:
+    SWITCH '(' expr ')' switch_body
+        { printf(">>> Valid switch statement parsed.\n"); }
+    ;
+
+switch_body:
+    '{' case_list '}'
+    ;
+
+case_list:
+    /* empty */
+    | case_list case_item
+    ;
+
+case_item:
+    case_labels stmt_list
+    ;
+
+/* Handles single and multiple case labels (fall-through) */
+case_labels:
+    CASE expr ':'
+    | case_labels CASE expr ':'
+    | DEFAULT ':'
+    | case_labels DEFAULT ':'
+    ;
+
+/* Expression grammar */
+expr:
+    INTEGER
+    | IDENTIFIER
+    | expr '=' expr
+    | expr '+' expr
+    | expr '-' expr
+    | expr '*' expr
+    | expr '/' expr
+    | expr '%' expr
+    | '(' expr ')'
+    ;
+
+%%
+/* ---------- USER SUBROUTINES ---------- */
+
+void yyerror(const char *s) {
+    fprintf(stderr, "Syntax Error: %s\n", s);
+}
+
+int main(int argc, char *argv[]) {
+    /* Read from file if provided, otherwise stdin */
+    if (argc > 1) {
+        yyin = fopen(argv[1], "r");
+        if (!yyin) {
+            perror("Error opening file");
+            return 1;
+        }
+    }
+
+    printf("C Switch Statement Syntax Analyzer\n");
+    printf("==================================\n\n");
+
+    yyparse();
+
+    if (argc > 1) {
+        fclose(yyin);
+    }
+
+    printf("\nParsing completed.\n");
+    return 0;
+}
+[24bcs036@mepcolinux ex4]$./switch input.txt
+bash: ./switch: No such file or directory
+[24bcs036@mepcolinux ex4]$ls
+ex4.prn  input.txt  input1.txt	lex.yy.c  switch.l  switch.y  switch_parser  syntax_analyzer  y.tab.c  y.tab.h
+[24bcs036@mepcolinux ex4]$./switch_parser input.txt
+C Switch Statement Syntax Analyzer
+==================================
+
+Syntax Error: syntax error
+
+Parsing completed.
+[24bcs036@mepcolinux ex4]$cat input.txt
+switch (a) {
+    case 1
+        a = 10;
+        break;
+    case 2:
+    case 3:
+        b = a + 20;
+        break;
+    default:
+        a = 0;
+        break;
+}
+
+switch (10 + 2) {
+    case 12:
+        x = 1;
+        break;
+    default:
+        x = 0;
+        break;
+
+[24bcs036@mepcolinux ex4]$cat input1.txt
+switch (a) {
+    case 1:
+        a = 10;
+        break;
+    case 2:
+    case 3:
+        b = a + 20;
+        break;
+    default:
+        a = 0;
+        break;
+}
+[24bcs036@mepcolinux ex4]$./switch_parser input1.txt
+C Switch Statement Syntax Analyzer
+==================================
+
+>>> Valid switch statement parsed.
+
+Parsing completed.
+[24bcs036@mepcolinux ex4]$exit
+exit
+
+Script done on Thu Oct  1 11:56:58 2026
